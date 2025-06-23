@@ -267,7 +267,7 @@ class Levenshtein:
             hyp = [x.lower() for x in hyp]
 
         #pp = pprint.PrettyPrinter(width=300)
-        lev.backMatrix = BackTrackMatrix(len(ref), len(hyp), weights)
+        lev.backMatrix = BackTrackMatrix(ref, hyp, weights)
 
         # Starts with 1st word in hyp
         for index2, char2 in enumerate(hyp):
@@ -497,7 +497,9 @@ class Levenshtein:
 
 
 class BackTrackMatrix:
-    def __init__(self, reflen, hyplen, weights=Levenshtein.uniformWeights):
+    def __init__(self, ref, hyp, weights=Levenshtein.uniformWeights):
+        reflen, hyplen = len(ref), len(hyp)
+        self.ref, self.hyp = ref, hyp
         self.reflen = reflen
         self.hyplen = hyplen
         self.weights = weights
@@ -519,6 +521,141 @@ class BackTrackMatrix:
             self.addBackTrack(0, j, AlignLabels.deletion,
                               j*weights[AlignLabels.deletion])
 
+    def __str__(self):
+        """创建带有行列标签的可视化回溯矩阵"""
+
+        # 操作类型缩写
+        def abbreviate_op(op):
+            if op in (AlignLabels.correct, "correct"):
+                return '↘'
+            elif op in (AlignLabels.substitution, "substitution"):
+                return '↘'
+            elif op in (AlignLabels.insertion, "insertion"):
+                return '↓'
+            elif op in (AlignLabels.deletion, "deletion"):
+                return '→'
+            return str(op)[0]  # 默认取首字母
+        
+        # 检查是否设置了参考序列和假设序列
+        has_ref = hasattr(self, 'ref') and self.ref is not None
+        has_hyp = hasattr(self, 'hyp') and self.hyp is not None
+        
+        # 收集所有单元格显示内容
+        display_cells = []
+        max_cell_len = 0
+        
+        for i in range(self.row_count):
+            row = []
+            for j in range(self.col_count):
+                slot = self.matrix[i][j]
+                weight = slot.weight
+                if weight == int(weight):
+                    weight_str = str(int(weight))
+                else:
+                    weight_str = f"{weight:.1f}"
+                
+                # 获取操作缩写并排序
+                ops = [abbreviate_op(op) for op in slot.backTrackOptions]
+                ops_str = ''.join(sorted(set(ops)))
+                cell_str = f"{weight_str}[{ops_str}]"
+                row.append(cell_str)
+                max_cell_len = max(max_cell_len, len(cell_str))
+            display_cells.append(row)
+        
+        # 构建列标题（参考序列）
+        col_headers = []
+        max_ref_len = 0
+        
+        # 添加初始状态的列标题（空白）
+        if has_ref:
+            col_headers.append("")  # 行标题列上方空白
+            for j in range(1, self.col_count):  # 跳过第一列（0）
+                if j-1 < len(self.ref):
+                    ref_item = str(self.ref[j-1])
+                    col_headers.append(ref_item)
+                    max_ref_len = max(max_ref_len, len(ref_item))
+                else:
+                    col_headers.append("")
+        
+        # 构建行标题（假设序列）
+        row_headers = []
+        max_hyp_len = 0
+        
+        if has_hyp:
+            # 添加初始状态的行标题（空白）
+            row_headers.append("")  # 列标题行左边空白
+            for i in range(1, self.row_count):  # 跳过第一行（0）
+                if i-1 < len(self.hyp):
+                    hyp_item = str(self.hyp[i-1])
+                    row_headers.append(hyp_item)
+                    max_hyp_len = max(max_hyp_len, len(hyp_item))
+                else:
+                    row_headers.append("")
+        
+        # 计算最大宽度用于对齐
+        cell_width = max_cell_len
+        ref_width = max_ref_len
+        hyp_width = max_hyp_len
+        
+        # 构建表格行
+        lines = []
+        
+        # 1. 添加列标题行（参考序列）
+        if has_ref and has_hyp:
+            # 左上角空白格
+            header_line = [" " * (hyp_width + 2)]
+            
+            # 添加参考序列字符作为列标题
+            for j in range(0, self.col_count):
+                if j < len(col_headers):
+                    header = col_headers[j]
+                    # 对齐：内容居中，两边填充空格
+                    if j == 0:  # 第一列对齐行标题
+                        padded = header.center(hyp_width)
+                    else:
+                        padded = header.center(max(cell_width, ref_width))
+                    header_line.append(padded)
+            
+            lines.append(" ".join(header_line))
+        
+        # 2. 添加分隔线
+        if has_ref and has_hyp:
+            sep_items = ["-" * (hyp_width + 2)]
+            for j in range(self.col_count):
+                if j == 0:
+                    sep_items.append("-" * hyp_width)
+                else:
+                    sep_items.append("-" * max(cell_width, ref_width))
+            lines.append(" ".join(sep_items))
+        
+        # 3. 添加数据行（每行包含行标题和矩阵内容）
+        for i in range(self.row_count):
+            line_items = []
+            
+            # 添加行标题（假设序列）
+            if has_hyp:
+                if i < len(row_headers):
+                    hyp_header = row_headers[i] if i < len(row_headers) else ""
+                    line_items.append(hyp_header.rjust(hyp_width))
+                else:
+                    line_items.append(" " * hyp_width)
+            else:
+                line_items.append("")  # 无行标题时留空
+            
+            # 添加矩阵内容
+            for j in range(self.col_count):
+                cell = display_cells[i][j]
+                
+                # 第一列特殊处理（对齐行标题）
+                if j == 0:
+                    line_items.append(cell.rjust(max(cell_width, hyp_width)))
+                else:
+                    line_items.append(cell.rjust(max(cell_width, ref_width)))
+            
+            lines.append(" ".join(line_items))
+        
+        return "\n".join(lines)
+
     def addBackTrack(self, i, j, alignLabels, weight=1.0):
         self.matrix[i][j] = BackTrackSlot(weight)
         self.matrix[i][j].addOptions(alignLabels)
@@ -528,6 +665,7 @@ class BackTrackMatrix:
 
     def getWeight(self, i, j):
         return self.matrix[i][j].weight
+    
 
 
 class BackTrackSlot:
