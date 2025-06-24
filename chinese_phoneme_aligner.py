@@ -146,8 +146,10 @@ class SDAligner:
             's2_map': self.s2_map(),
             'align': self.expanded_align
         }
-        for k in report:
-            print(f"{k}: \n{report[k]}")
+        # for k in report:
+        #     print(f"{k}: \n{report[k]}")
+        print(self.ref, self.hyp)
+        print(self.expanded_align)
         return report
 
     def confusion_pairs(self):
@@ -160,107 +162,102 @@ class SDAligner:
 
         返回:
             list[tuple[str, str]]: 一个包含混淆对的列表。
-                                   每个元组的第一个元素是参考文本中的词，
-                                   第二个元素是假设文本中对应的词。
-                                   例如: [('三', '散'), ('孜儿里', '走的')]
+                                     每个元组的第一个元素是参考文本中的词，
+                                     第二个元素是假设文本中对应的词。
+                                     例如对于 "三不孜儿里" vs "散不走的",
+                                     可能会返回 [('三', '散'), ('孜儿', '走'), ('里', '的')]
         """
         if not self.expanded_align:
-            raise ValueError("请先执行 align_phonemes() 进行对齐操作")
-
-        # 移除空格以处理带空格的输入字符串
-        ref_chars = list(self.ref.replace(" ", ""))
-        hyp_chars = list(self.hyp.replace(" ", ""))
+            raise ValueError("请先执行对齐操作")
         
-        s1_aligned = self.s1_tokens()
-        s2_aligned = self.s2_tokens()
-
-        # --- 步骤 1: 生成原始的、逐字的对偶列表 ---
+        s1 = self.s1()
+        s2 = self.s2()
+        ops = self.hyp_oriented_alignment()
         
-        raw_pairs = []
-        # 使用 '||' 作为同步点，切分对齐序列
-        boundaries = [-1] + [i for i, token in enumerate(s1_aligned) if token == '||']
+        # 使用原始文本，以便索引保持一致
+        ref_chars = list(self.ref)
+        hyp_chars = list(self.hyp)
+
+        # --- 1. 构建音素到汉字索引的映射 ---
+        # 映射列表的每个元素，其值表示该音素属于第几个汉字（从0开始）
+        ref_phoneme_to_char_map = []
+        current_ref_idx = 0
+        for token in s1:
+            ref_phoneme_to_char_map.append(current_ref_idx)
+            if token == '||':
+                current_ref_idx += 1
         
-        ref_char_idx = 0
-        hyp_char_idx = 0
+        hyp_phoneme_to_char_map = []
+        current_hyp_idx = 0
+        for token in s2:
+            hyp_phoneme_to_char_map.append(current_hyp_idx)
+            if token == '||':
+                current_hyp_idx += 1
 
-        for i in range(len(boundaries)):
-            start = boundaries[i] + 1
-            # 确定分片的结束位置
-            end = boundaries[i+1] if i + 1 < len(boundaries) else len(s1_aligned)
+        # --- 2. 识别并合并错误段 ---
+        confusion_pairs = []
+        in_confusion_segment = False
+        segment_start_idx = 0
+        i = 0
+        
+        while i < len(ops):
+            op = ops[i]
+            token1 = s1[i]
             
-            if start >= end: # 处理末尾或连续的 '||'
-                continue
+            # 确定当前位置是否为“错误”
+            is_error = False
+            if op != 'C':
+                is_error = True
+            elif token1 != '||':  # 操作是 'C' 且不是分隔符
+                ref_char_idx = ref_phoneme_to_char_map[i]
+                hyp_char_idx = hyp_phoneme_to_char_map[i]
+                
+                # 检查对应的汉字是否不同
+                if ref_char_idx < len(ref_chars) and hyp_char_idx < len(hyp_chars):
+                    if ref_chars[ref_char_idx] != hyp_chars[hyp_char_idx]:
+                        is_error = True
+                # 如果一个文本结束了，但另一个还在继续，也算错误
+                elif ref_char_idx >= len(ref_chars) or hyp_char_idx >= len(hyp_chars):
+                     is_error = True
 
-            s1_segment = s1_aligned[start:end]
-            s2_segment = s2_aligned[start:end]
+            if is_error and not in_confusion_segment:
+                # 发现一个新的混淆段的开始
+                in_confusion_segment = True
+                segment_start_idx = i
+            elif not is_error and in_confusion_segment:
+                # 混淆段结束，处理并提取混淆对
+                in_confusion_segment = False
+                segment_end_idx = i
+                
+                ref_indices = {ref_phoneme_to_char_map[j] for j in range(segment_start_idx, segment_end_idx) if s1[j] not in ('||', '')}
+                hyp_indices = {hyp_phoneme_to_char_map[j] for j in range(segment_start_idx, segment_end_idx) if s2[j] not in ('||', '')}
 
-            # 判断该分片是否包含来自REF或HYP的实际音素（非填充符'*'）
-            has_ref_phonemes = any(p != '*' for p in s1_segment)
-            has_hyp_phonemes = any(p != '*' for p in s2_segment)
-            
-            ref_word_part = ""
-            if has_ref_phonemes:
-                if ref_char_idx < len(ref_chars):
-                    ref_word_part = ref_chars[ref_char_idx]
-                    ref_char_idx += 1
-            
-            hyp_word_part = ""
-            if has_hyp_phonemes:
-                if hyp_char_idx < len(hyp_chars):
-                    hyp_word_part = hyp_chars[hyp_char_idx]
-                    hyp_char_idx += 1
-            
-            # 只有当该“字槽”至少在一个序列中被占用时才记录
-            if ref_word_part or hyp_word_part:
-                raw_pairs.append((ref_word_part, hyp_word_part))
+                if ref_indices or hyp_indices:
+                    ref_word = "".join(ref_chars[min(ref_indices):max(ref_indices)+1]) if ref_indices else ""
+                    hyp_word = "".join(hyp_chars[min(hyp_indices):max(hyp_indices)+1]) if hyp_indices else ""
+                    
+                    if ref_word or hyp_word:
+                        confusion_pairs.append((ref_word, hyp_word))
 
-        # --- 步骤 2: 合并连续的非正确对偶 ---
+            i += 1
 
-        final_pairs = []
-        if not raw_pairs:
-            return final_pairs
+        # 如果对齐在混淆段中结束，处理最后一个段
+        if in_confusion_segment:
+            segment_end_idx = len(ops)
+            ref_indices = {ref_phoneme_to_char_map[j] for j in range(segment_start_idx, segment_end_idx) if s1[j] not in ('||', '')}
+            hyp_indices = {hyp_phoneme_to_char_map[j] for j in range(segment_start_idx, segment_end_idx) if s2[j] not in ('||', '')}
 
-        current_group = []
-        for ref_part, hyp_part in raw_pairs:
-            # 如果是正确的对齐 (C)，则它是一个断点
-            if ref_part == hyp_part and ref_part != "":
-                # 如果前面有累积的混淆组，先处理它
-                if current_group:
-                    ref_combined = "".join(p[0] for p in current_group)
-                    hyp_combined = "".join(p[1] for p in current_group)
-                    final_pairs.append((ref_combined, hyp_combined))
-                    current_group = []
-            # 如果是错误 (S, D, I) 或空对齐，则加入当前混淆组
-            else:
-                current_group.append((ref_part, hyp_part))
+            if ref_indices or hyp_indices:
+                ref_word = "".join(ref_chars[min(ref_indices):max(ref_indices)+1]) if ref_indices else ""
+                hyp_word = "".join(hyp_chars[min(hyp_indices):max(hyp_indices)+1]) if hyp_indices else ""
+                
+                if ref_word or hyp_word:
+                    confusion_pairs.append((ref_word, hyp_word))
 
-        # 处理循环结束后可能遗留的最后一个混淆组
-        if current_group:
-            ref_combined = "".join(p[0] for p in current_group)
-            hyp_combined = "".join(p[1] for p in current_group)
-            final_pairs.append((ref_combined, hyp_combined))
-            
-        return final_pairs
+        return confusion_pairs
 
     
-
-
-# 测试代码示例
-if __name__ == "__main__":
-    # ref_text = "三不孜儿里"
-    # hyp_text = "散不走的"
-    ref_text = "周天才"
-    hyp_text = "中间开关"
-
-    ref_text = "曹师傅"
-    hyp_text = "找的时候"
-
-    ref_text = "支付宝到账"
-    hyp_text = "知不道仗"
-
-    ref_text = "哦奏是写的周奎奏写的周奎那你几块表还几块表"
-    hyp_text = "哦都是写的周都写的周回嘛你几块表还是几块电啊"
-    
+def test_aligner(ref_text, hyp_text):
     aligner = SDAligner()
     
     # 执行对齐
@@ -274,3 +271,28 @@ if __name__ == "__main__":
 
     # 输出结果
     print(confusion)
+    print()
+
+# 测试代码示例
+if __name__ == "__main__":
+    ref_text = "三不孜儿里"
+    hyp_text = "散不走的"
+    test_aligner(ref_text, hyp_text)
+
+    ref_text = "周天才"
+    hyp_text = "中间开关"
+    test_aligner(ref_text, hyp_text)
+
+    ref_text = "曹师傅"
+    hyp_text = "找的时候"
+    test_aligner(ref_text, hyp_text)
+
+    ref_text = "支付宝到账"
+    hyp_text = "知不道仗"
+    test_aligner(ref_text, hyp_text)
+
+    ref_text = "哦奏是写的周奎奏写的周奎那你几块表还几块表"
+    hyp_text = "哦都是写的周都写的周回嘛你几块表还是几块电啊"
+    test_aligner(ref_text, hyp_text)
+    
+    
