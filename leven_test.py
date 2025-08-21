@@ -94,3 +94,9 @@ text = ["哦奏是写的周奎奏写的周奎那你几块表还几块表",
 print(text)
 phn = chinese_word_phonemization(text)
 test_lev_phones1(phn[0].split(), phn[1].split())
+
+text = ["干冒干含有个红灯闪",
+        "们们门们们红镇上"]
+print(text)
+phn = chinese_word_phonemization(text)
+test_lev_phones1(phn[0].split(), phn[1].split())
