@@ -4,6 +4,8 @@ from phonemizer.separator import Separator
 from collections import defaultdict, Counter
 import Levenshtein as lev
 import re
+from chinese_phoneme_aligner import SDAligner
+
 
 class ChineseSegmentEvaluator:
     def __init__(self, weights=None, reserve_list=None, exclusive_sets=None):
@@ -23,6 +25,18 @@ class ChineseSegmentEvaluator:
             {'r', 'axr', 'er'}
         ]
         self.expanded_align = None
+        
+        # 滚动统计（累计平均）
+        self._rolling_count = 0
+        self._rolling_sum_recall = 0.0
+        self._rolling_sum_precision = 0.0
+        self._rolling_sum_f1 = 0.0
+        self._rolling_sum_cer = 0.0
+        self._rolling_sum_sdcer = 0.0
+
+        # 供复用的SDAligner实例
+        self._sd_aligner = SDAligner(weights=self.weights, reserve_list=self.reserve_list, exclusive_sets=self.exclusive_sets)
+    
     
     @staticmethod
     def phonemize_chinese(text):
@@ -92,6 +106,11 @@ class ChineseSegmentEvaluator:
         返回:
         dict: 包含召回率、准确率、交并比等指标的字典
         """
+        # 0. 先计算SDAligner提供的指标（基于原始输入）
+        cer_value = self._sd_aligner.CER(ref_text, hyp_text)
+        sdcer_result = self._sd_aligner.SDCER(ref_text, hyp_text)
+        sdcer_value = sdcer_result.get('SDCER', 0.0)
+
         # 1. 获取去掉标点后的文本
         ref_text = re.sub(r'[,，。！？；：]', '', ref_text)
         hyp_text = re.sub(r'[,，。！？；：]', '', hyp_text)
@@ -272,8 +291,24 @@ class ChineseSegmentEvaluator:
         intersection = len(ref_cover & hyp_cover)
         union = len(ref_cover | hyp_cover)
         iou = (intersection / union) if union else 0.0
+        
+        # 更新滚动平均
+        self._rolling_count += 1
+        self._rolling_sum_recall += recall
+        self._rolling_sum_precision += precision
+        self._rolling_sum_f1 += f1
+        self._rolling_sum_cer += cer_value
+        self._rolling_sum_sdcer += sdcer_value
+        self.rolling_recall_avg = self._rolling_sum_recall / self._rolling_count if self._rolling_count else 0.0
+        self.rolling_precision_avg = self._rolling_sum_precision / self._rolling_count if self._rolling_count else 0.0
+        self.rolling_f1_avg = self._rolling_sum_f1 / self._rolling_count if self._rolling_count else 0.0
+        self.rolling_cer_avg = self._rolling_sum_cer / self._rolling_count if self._rolling_count else 0.0
+        self.rolling_sdcer_avg = self._rolling_sum_sdcer / self._rolling_count if self._rolling_count else 0.0
+
         # from IPython import embed;embed()
         return {
+            'cer': cer_value,
+            'sdcer': sdcer_value,
             'recall': recall,
             'precision': precision,
             'f1': f1,
@@ -294,11 +329,14 @@ class ChineseSegmentEvaluator:
             'ref_segments_phoneme': ref_segments_ph,
             'hyp_segments_phoneme': hyp_segments_ph,
             'matches': matches,
-            'alignment': alignment,
+            # 'alignment': alignment,
             'ref_tokens': ref_tokens,
             'hyp_tokens': hyp_tokens,
-            'ref_phonemes': ref_phonemes_nosep,
-            'hyp_phonemes': hyp_phonemes_nosep,
+            'rolling_recall_avg': self.rolling_recall_avg,
+            'rolling_precision_avg': self.rolling_precision_avg,
+            'rolling_f1_avg': self.rolling_f1_avg,
+            'rolling_cer_avg': self.rolling_cer_avg,
+            'rolling_sdcer_avg': self.rolling_sdcer_avg,
         }
     
     def _has_overlap(self, start1, end1, start2, end2):
@@ -337,7 +375,6 @@ class ChineseSegmentEvaluator:
         print("评估指标:")
         for k,v in result.items():
             print(k,": ", v)
-        
         print()
         
         # 打印音素对齐信息

@@ -230,12 +230,12 @@ class SDAligner:
     def _parse_segments(self, ref):
         """
         将ref分割为带括号和不带括号的片段，返回[(is_phoneme, text)]
-        is_phoneme: True表示【】内，False表示普通汉字
+        is_phoneme: True表示<>内，False表示普通汉字
         """
         import re
         segments = []
         last = 0
-        for m in re.finditer(r'【([^】]*)】', ref):
+        for m in re.finditer(r'<([^>]*)>', ref):
             if m.start() > last:
                 # 前面有普通汉字
                 segments.append((False, ref[last:m.start()]))
@@ -247,7 +247,7 @@ class SDAligner:
 
     def SDCER(self, ref, hyp):
         """
-        计算Segment-Dependent CER，遍历每个confusion_pair，判断ref片段是否在【】中，选择按音素或汉字计算，并区分S, D, I三种错误。
+        计算Segment-Dependent CER，遍历每个confusion_pair，判断ref片段是否在<>中，选择按音素或汉字计算，并区分S, D, I三种错误。
         音素片段按'||'分割，每个音节合并为一个整体。使用Levenshtein.editops严格统计S/D/I。
         """
         # 1. 解析ref的分段区间
@@ -262,26 +262,28 @@ class SDAligner:
             seg_spans.append((is_phoneme, start, end, text))
             idx = end
         # 2. 对齐
-        print(seg_spans)
-        ref_plain = ref.replace('【','').replace('】','')
+        # print(seg_spans)
+        ref_plain = ref.replace('<','').replace('>','')
         self.align_phonemes(ref_plain, hyp)
         confusion_pairs = self.confusion_pairs(include_correct=True)
-        print(self.expanded_align)
-        print(confusion_pairs)
+        # print(self.expanded_align)
+        # print(confusion_pairs)
         # 3. 遍历每个pair，判断ref_word属于哪个片段
         total = len(ref_plain)
-        S = D = I = 0
+        # 分别统计音素区间与汉字区间的S/D/I（仅维护分量，最终再汇总）
+        S_phn = D_phn = I_phn = 0.0
+        S_chr = D_chr = I_chr = 0.0
         ref_idx = 0
         for ref_word, hyp_word, _ in confusion_pairs:
             # 找到ref_word在ref_plain中的起止
             if not ref_word:
                 # 插入错误
-                I += len(hyp_word)
+                I_chr += len(hyp_word)
                 # total += len(hyp_word)
                 continue
             if not hyp_word:
                 # 删除错误
-                D += len(ref_word)
+                D_chr += len(ref_word)
                 # total += len(ref_word)
                 ref_idx += len(ref_word)
                 continue
@@ -293,41 +295,70 @@ class SDAligner:
                 if ref_start >= seg_start and ref_end <= seg_end:
                     break
             if is_phoneme:
-                # 音素比对，按'||'分割，每个音节合并为一个整体
+                # UDS区间：音素比对，按'||'分割，每个音节合并为一个整体
+                # 根据SDCER公式，需要将音素级错误归一化到字符级：e_i * (c_i/p_i)
                 def get_syllables(text):
                     phn = self.phonemize_chinese([text])[0]
-                    sylls = [s.replace(' ', '') for s in phn.split('||')]
+                    sylls = phn.replace('||', ' ').split(' ') #.replace(' ', '')
                     return [s.strip() for s in sylls if s.strip()]
                 ref_sylls = get_syllables(ref_word)
                 hyp_sylls = get_syllables(hyp_word) if hyp_word else []
-                print(ref_sylls, hyp_sylls, ref_sylls == hyp_sylls)
-                # total += len(ref_sylls)
+                # print("!! ", ref_sylls, hyp_sylls, ref_sylls == hyp_sylls)
+                
+                # 计算字符数和音素数
+                c_i = len(ref_word)  # 字符数
+                p_i = len(ref_sylls)  # 音素数
+                
                 if ref_sylls == hyp_sylls:
-                    pass  # 全对
+                    pass  # 全对，无错误
                 else:
                     ops = lev.editops(ref_sylls, hyp_sylls)
+                    # 根据SDCER公式，将音素级错误归一化到字符级：e_i * (c_i/p_i)
+                    normalization_factor = c_i / p_i if p_i > 0 else 1.0
+                    
+                    # 按错误类型统计，每个错误都乘以归一化因子
                     for op, i, j in ops:
                         if op == 'replace':
-                            S += 1
+                            S_phn += 1 * normalization_factor
                         elif op == 'delete':
-                            D += 1
+                            D_phn += 1 * normalization_factor
                         elif op == 'insert':
-                            I += 1
+                            I_phn += 1 * normalization_factor
             else:
                 # 汉字比对
                 # total += len(ref_word)
                 ops = lev.editops(ref_word, hyp_word)
                 for op, i, j in ops:
                     if op == 'replace':
-                        S += 1
+                        S_chr += 1
                     elif op == 'delete':
-                        D += 1
+                        D_chr += 1
                     elif op == 'insert':
-                        I += 1
+                        I_chr += 1
             ref_idx += len(ref_word)
+            # print(ref_word, hyp_word, S, D, I)
+            # import pdb; pdb.set_trace()
+        # 汇总总量
+        S = S_phn + S_chr
+        D = D_phn + D_chr
+        I = I_phn + I_chr
         errors = S + D + I
-        return {'SDCER': errors / total if total > 0 else 0, 'S': S, 'D': D, 'I': I, 'N': total}
+        errors_phn = S_phn + D_phn + I_phn
+        errors_chr = S_chr + D_chr + I_chr
+        return {
+            'SDCER': errors / total if total > 0 else 0,
+            'S': S, 'D': D, 'I': I, 'N': total,
+            'S_phn': S_phn, 'D_phn': D_phn, 'I_phn': I_phn,
+            'S_chr': S_chr, 'D_chr': D_chr, 'I_chr': I_chr,
+            'errors_phn': errors_phn, 'errors_chr': errors_chr
+        }
 
+    def CER(self, ref, hyp):
+        """
+        计算CER
+        """
+        ref_plain = ref.replace('<','').replace('>','')
+        return lev.ratio(ref_plain, hyp)
 
 
     
@@ -351,7 +382,7 @@ def test_sdcer(ref_text, hyp_text):
     aligner = SDAligner()
     
     sdcer = aligner.SDCER(ref_text, hyp_text)
-    ref_plain = ref_text.replace('【','').replace('】','')
+    ref_plain = ref_text.replace('<','').replace('>','')
     ops = lev.editops(ref_plain, hyp_text)
 
     # 输出结果
@@ -365,14 +396,21 @@ if __name__ == "__main__":
     # hyp_text = ""
     # test_aligner(ref_text, hyp_text)
 
-    # ref_text = "【三不孜儿嗯】里"
+    # ref_text = "<三不孜儿嗯>里"
     ref_text = "三不孜儿嗯里"
     hyp_text = "散不走的"
     test_aligner(ref_text, hyp_text)
     # test_sdcer(ref_text, hyp_text)
 
+    ref_text = "你<散不子儿>地看哈短信息"
+    hyp_text = "你散不子儿地看哈端信席"
+    test_sdcer(ref_text, hyp_text)
+
+    ref_text = "你<散不子儿>地看哈短信息"
+    hyp_text = "你三不走地看哈短信息"
+    test_sdcer(ref_text, hyp_text)
     
-    ref_text = "哎【蒽】抽个空过来把【哥】电费交【葭】啥"
+    ref_text = "哎<蒽>抽个空过来把<哥>电费交<葭>啥"
     hyp_text = "唉䅰抽个孔过来把歌电费交下哈"
     # test_aligner(ref_text, hyp_text)
     test_sdcer(ref_text, hyp_text)
