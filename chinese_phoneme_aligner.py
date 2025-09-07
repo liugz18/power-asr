@@ -267,7 +267,8 @@ class SDAligner:
         self.align_phonemes(ref_plain, hyp)
         confusion_pairs = self.confusion_pairs(include_correct=True)
         # print(self.expanded_align)
-        # print(confusion_pairs)
+        print(confusion_pairs)
+        print(seg_spans)
         # 3. 遍历每个pair，判断ref_word属于哪个片段
         total = len(ref_plain)
         # 分别统计音素区间与汉字区间的S/D/I（仅维护分量，最终再汇总）
@@ -336,7 +337,7 @@ class SDAligner:
                     elif op == 'insert':
                         I_chr += 1
             ref_idx += len(ref_word)
-            # print(ref_word, hyp_word, S, D, I)
+            # print(ref_word, hyp_word, S_chr, D_chr, I_chr, S_phn, D_phn, I_phn)
             # import pdb; pdb.set_trace()
         # 汇总总量
         S = S_phn + S_chr
@@ -358,7 +359,7 @@ class SDAligner:
         计算CER
         """
         ref_plain = ref.replace('<','').replace('>','')
-        return lev.ratio(ref_plain, hyp)
+        return len(lev.editops(ref_plain, hyp)) / (len(ref_plain) if len(ref_plain) > 0 else 1)
 
 
     

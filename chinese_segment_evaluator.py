@@ -28,11 +28,19 @@ class ChineseSegmentEvaluator:
         
         # 滚动统计（累计平均）
         self._rolling_count = 0
-        self._rolling_sum_recall = 0.0
-        self._rolling_sum_precision = 0.0
-        self._rolling_sum_f1 = 0.0
-        self._rolling_sum_cer = 0.0
-        self._rolling_sum_sdcer = 0.0
+        self.rolling_recall_avg = 0.0
+        self.rolling_precision_avg = 0.0
+        self.rolling_f1_avg = 0.0
+        self.rolling_cer_avg = 0.0
+        self.rolling_sdcer_avg = 0.0
+        
+        # SDCER 分量比例滚动平均值（记录每种错误类型在SDCER中的比例分量）
+        self.rolling_s_phn_ratio_avg = 0.0
+        self.rolling_d_phn_ratio_avg = 0.0
+        self.rolling_i_phn_ratio_avg = 0.0
+        self.rolling_s_chr_ratio_avg = 0.0
+        self.rolling_d_chr_ratio_avg = 0.0
+        self.rolling_i_chr_ratio_avg = 0.0
 
         # 供复用的SDAligner实例
         self._sd_aligner = SDAligner(weights=self.weights, reserve_list=self.reserve_list, exclusive_sets=self.exclusive_sets)
@@ -89,7 +97,7 @@ class ChineseSegmentEvaluator:
             exclusive_sets=self.exclusive_sets
         )
         lev.editops()
-        self.expanded_align = lev.expandAlignCompact()
+        self.expanded_align = lev.expandAlign()#Compact()
         
         return self.expanded_align
     
@@ -100,23 +108,29 @@ class ChineseSegmentEvaluator:
         评估带【】标记的中文文本的召回率和准确率
         
         参数:
-        ref_text: 参考文本，包含【】标记
+        ref_text: 参考文本，包含【】,<>标记
         hyp_text: 假设文本，包含【】标记
         
         返回:
-        dict: 包含召回率、准确率、交并比等指标的字典
+        dict: 包含CER, SDCER, 召回率、准确率、交并比等指标的字典
         """
-        # 0. 先计算SDAligner提供的指标（基于原始输入）
-        cer_value = self._sd_aligner.CER(ref_text, hyp_text)
-        sdcer_result = self._sd_aligner.SDCER(ref_text, hyp_text)
-        sdcer_value = sdcer_result.get('SDCER', 0.0)
 
-        # 1. 获取去掉标点后的文本
-        ref_text = re.sub(r'[,，。！？；：]', '', ref_text)
-        hyp_text = re.sub(r'[,，。！？；：]', '', hyp_text)
-        # 2. 获取去掉【】后的纯文本
+        #1. 获取去掉标点后的文本
+        ref_text = re.sub(r'[,，。！？?；：\'"‘’“”]', '', ref_text)
+        hyp_text = re.sub(r'[,，。！？?；：\'"‘’“”]', '', hyp_text)
+        # 0. 先计算SDAligner提供的指标（基于原始输入）
         ref_plain = ref_text.replace('【', '').replace('】', '')
         hyp_plain = hyp_text.replace('【', '').replace('】', '')
+
+        cer_value = self._sd_aligner.CER(ref_plain, hyp_plain)
+        sdcer_result = self._sd_aligner.SDCER(ref_plain, hyp_plain)
+        sdcer_value = sdcer_result.get('SDCER', 0.0)
+
+         
+        # 2. 获取去掉【】后的纯文本
+        ref_text = ref_text.replace('<', '').replace('>', '')
+        ref_plain = ref_plain.replace('<', '').replace('>', '')
+        # hyp_plain = hyp_text.replace('', '').replace('】', '')
         
         # 3. 执行音素对齐
         self.align_phonemes(ref_plain, hyp_plain)
@@ -294,16 +308,51 @@ class ChineseSegmentEvaluator:
         
         # 更新滚动平均
         self._rolling_count += 1
-        self._rolling_sum_recall += recall
-        self._rolling_sum_precision += precision
-        self._rolling_sum_f1 += f1
-        self._rolling_sum_cer += cer_value
-        self._rolling_sum_sdcer += sdcer_value
-        self.rolling_recall_avg = self._rolling_sum_recall / self._rolling_count if self._rolling_count else 0.0
-        self.rolling_precision_avg = self._rolling_sum_precision / self._rolling_count if self._rolling_count else 0.0
-        self.rolling_f1_avg = self._rolling_sum_f1 / self._rolling_count if self._rolling_count else 0.0
-        self.rolling_cer_avg = self._rolling_sum_cer / self._rolling_count if self._rolling_count else 0.0
-        self.rolling_sdcer_avg = self._rolling_sum_sdcer / self._rolling_count if self._rolling_count else 0.0
+        
+        # 计算当前 SDCER 分量比例
+        n_total = sdcer_result.get('N', 1.0)  # 避免除零
+        current_s_phn_ratio = sdcer_result.get('S_phn', 0.0) / n_total
+        current_d_phn_ratio = sdcer_result.get('D_phn', 0.0) / n_total
+        current_i_phn_ratio = sdcer_result.get('I_phn', 0.0) / n_total
+        current_s_chr_ratio = sdcer_result.get('S_chr', 0.0) / n_total
+        current_d_chr_ratio = sdcer_result.get('D_chr', 0.0) / n_total
+        current_i_chr_ratio = sdcer_result.get('I_chr', 0.0) / n_total
+        
+        # 更新滚动平均值（通过历史平均 × 历史数量 + 当前值）÷ 新数量
+        if self._rolling_count == 1:
+            # 第一个样本
+            self.rolling_recall_avg = recall
+            self.rolling_precision_avg = precision
+            self.rolling_f1_avg = f1
+            self.rolling_cer_avg = cer_value
+            self.rolling_sdcer_avg = sdcer_value
+            self.rolling_s_phn_ratio_avg = current_s_phn_ratio
+            self.rolling_d_phn_ratio_avg = current_d_phn_ratio
+            self.rolling_i_phn_ratio_avg = current_i_phn_ratio
+            self.rolling_s_chr_ratio_avg = current_s_chr_ratio
+            self.rolling_d_chr_ratio_avg = current_d_chr_ratio
+            self.rolling_i_chr_ratio_avg = current_i_chr_ratio
+        else:
+            # 后续样本：新平均 = (历史平均 × 历史数量 + 当前值) ÷ 新数量
+            prev_count = self._rolling_count - 1
+            self.rolling_recall_avg = (self.rolling_recall_avg * prev_count + recall) / self._rolling_count
+            self.rolling_precision_avg = (self.rolling_precision_avg * prev_count + precision) / self._rolling_count
+            self.rolling_f1_avg = (self.rolling_f1_avg * prev_count + f1) / self._rolling_count
+            self.rolling_cer_avg = (self.rolling_cer_avg * prev_count + cer_value) / self._rolling_count
+            self.rolling_sdcer_avg = (self.rolling_sdcer_avg * prev_count + sdcer_value) / self._rolling_count
+            self.rolling_s_phn_ratio_avg = (self.rolling_s_phn_ratio_avg * prev_count + current_s_phn_ratio) / self._rolling_count
+            self.rolling_d_phn_ratio_avg = (self.rolling_d_phn_ratio_avg * prev_count + current_d_phn_ratio) / self._rolling_count
+            self.rolling_i_phn_ratio_avg = (self.rolling_i_phn_ratio_avg * prev_count + current_i_phn_ratio) / self._rolling_count
+            self.rolling_s_chr_ratio_avg = (self.rolling_s_chr_ratio_avg * prev_count + current_s_chr_ratio) / self._rolling_count
+            self.rolling_d_chr_ratio_avg = (self.rolling_d_chr_ratio_avg * prev_count + current_d_chr_ratio) / self._rolling_count
+            self.rolling_i_chr_ratio_avg = (self.rolling_i_chr_ratio_avg * prev_count + current_i_chr_ratio) / self._rolling_count
+        
+        # 计算衍生分量比例（通过换算得到）
+        self.rolling_s_ratio_avg = self.rolling_s_phn_ratio_avg + self.rolling_s_chr_ratio_avg
+        self.rolling_d_ratio_avg = self.rolling_d_phn_ratio_avg + self.rolling_d_chr_ratio_avg
+        self.rolling_i_ratio_avg = self.rolling_i_phn_ratio_avg + self.rolling_i_chr_ratio_avg
+        self.rolling_errors_phn_ratio_avg = self.rolling_s_phn_ratio_avg + self.rolling_d_phn_ratio_avg + self.rolling_i_phn_ratio_avg
+        self.rolling_errors_chr_ratio_avg = self.rolling_s_chr_ratio_avg + self.rolling_d_chr_ratio_avg + self.rolling_i_chr_ratio_avg
 
         # from IPython import embed;embed()
         return {
@@ -315,11 +364,25 @@ class ChineseSegmentEvaluator:
             'tp_count': tp_count,
             'fp_count': fp_count,
             'fn_count': fn_count,
-            'ref_total': ref_total,
-            'hyp_total': hyp_total,
+            'ref_phn_total': ref_total,
+            'hyp_phn_total': hyp_total,
             'iou': iou,
             'intersection': intersection,
             'union': union,
+            # SDCER 分量比例（每种错误类型在SDCER中的比例分量）
+            's_phn_ratio': sdcer_result.get('S_phn', 0.0) / n_total,
+            'd_phn_ratio': sdcer_result.get('D_phn', 0.0) / n_total,
+            'i_phn_ratio': sdcer_result.get('I_phn', 0.0) / n_total,
+            's_chr_ratio': sdcer_result.get('S_chr', 0.0) / n_total,
+            'd_chr_ratio': sdcer_result.get('D_chr', 0.0) / n_total,
+            'i_chr_ratio': sdcer_result.get('I_chr', 0.0) / n_total,
+            # SDCER 衍生分量比例（通过换算得到）
+            's_ratio': (sdcer_result.get('S_phn', 0.0) + sdcer_result.get('S_chr', 0.0)) / n_total,
+            'd_ratio': (sdcer_result.get('D_phn', 0.0) + sdcer_result.get('D_chr', 0.0)) / n_total,
+            'i_ratio': (sdcer_result.get('I_phn', 0.0) + sdcer_result.get('I_chr', 0.0)) / n_total,
+            'n': sdcer_result.get('N', 0.0),
+            'errors_phn_ratio': (sdcer_result.get('S_phn', 0.0) + sdcer_result.get('D_phn', 0.0) + sdcer_result.get('I_phn', 0.0)) / n_total,
+            'errors_chr_ratio': (sdcer_result.get('S_chr', 0.0) + sdcer_result.get('D_chr', 0.0) + sdcer_result.get('I_chr', 0.0)) / n_total,
             # 保留原始分段信息，便于外部打印
             'ref_phonemes_nosep': ref_phonemes_nosep,
             'hyp_phonemes_nosep': hyp_phonemes_nosep,
@@ -332,11 +395,25 @@ class ChineseSegmentEvaluator:
             # 'alignment': alignment,
             'ref_tokens': ref_tokens,
             'hyp_tokens': hyp_tokens,
+            # 滚动平均值
             'rolling_recall_avg': self.rolling_recall_avg,
             'rolling_precision_avg': self.rolling_precision_avg,
             'rolling_f1_avg': self.rolling_f1_avg,
             'rolling_cer_avg': self.rolling_cer_avg,
             'rolling_sdcer_avg': self.rolling_sdcer_avg,
+            # SDCER 分量比例滚动平均值（基础分量）
+            'rolling_s_phn_ratio_avg': self.rolling_s_phn_ratio_avg,
+            'rolling_d_phn_ratio_avg': self.rolling_d_phn_ratio_avg,
+            'rolling_i_phn_ratio_avg': self.rolling_i_phn_ratio_avg,
+            'rolling_s_chr_ratio_avg': self.rolling_s_chr_ratio_avg,
+            'rolling_d_chr_ratio_avg': self.rolling_d_chr_ratio_avg,
+            'rolling_i_chr_ratio_avg': self.rolling_i_chr_ratio_avg,
+            # SDCER 衍生分量比例滚动平均值（通过换算得到）
+            'rolling_s_ratio_avg': self.rolling_s_ratio_avg,
+            'rolling_d_ratio_avg': self.rolling_d_ratio_avg,
+            'rolling_i_ratio_avg': self.rolling_i_ratio_avg,
+            'rolling_errors_phn_ratio_avg': self.rolling_errors_phn_ratio_avg,
+            'rolling_errors_chr_ratio_avg': self.rolling_errors_chr_ratio_avg,
         }
     
     def _has_overlap(self, start1, end1, start2, end2):
@@ -389,28 +466,28 @@ def test_evaluator():
     evaluator = ChineseSegmentEvaluator()
     
     # 测试用例1：你提供的例子
-    print("测试用例1:")
-    ref_text = "【三不】孜儿嗯里"
-    hyp_text = "【散不走】【的】"
-    result1 = evaluator.print_evaluation_report(ref_text, hyp_text)
+    # print("测试用例1:")
+    # ref_text = "【三不】孜儿嗯里"
+    # hyp_text = "【散不走】【的】"
+    # result1 = evaluator.print_evaluation_report(ref_text, hyp_text)
     
-    print("\n" + "="*80 + "\n")
+    # print("\n" + "="*80 + "\n")
     
     # 测试用例2：更复杂的例子
-    print("测试用例2:")
-    ref_text = "【三不】孜儿嗯里【测试】文本"
-    hyp_text = "【散不走】【的】【测试】文本内容"
-    # ['s', 'a5', 'n', 'p', 'u5', 'ts', 'i̪5', 'ərɜ', 'ŋɜ' , 'l', 'i2', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', '', '', '', '']
-    # ['s', 'a5', 'n', 'p', 'u5', 'ts', ''  , ''   , 'ou2', 't', 'ə1', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', 'n', 'ei5', 'ʐ', 'onɡɜ']
+    # print("测试用例2:")
+    # ref_text = "【三不】孜儿嗯里【测试】文本"
+    # hyp_text = "【散不走】【的】【测试】文本内容"
+    # # # ['s', 'a5', 'n', 'p', 'u5', 'ts', 'i̪5', 'ərɜ', 'ŋɜ' , 'l', 'i2', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', '', '', '', '']
+    # # # ['s', 'a5', 'n', 'p', 'u5', 'ts', ''  , ''   , 'ou2', 't', 'ə1', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', 'n', 'ei5', 'ʐ', 'onɡɜ']
 
-    result2 = evaluator.print_evaluation_report(ref_text, hyp_text)
+    # result2 = evaluator.print_evaluation_report(ref_text, hyp_text)
     
     print("\n" + "="*80 + "\n")
     
     # 测试用例3：没有标记的文本
     print("测试用例3:")
-    ref_text = "三不孜儿嗯里"
-    hyp_text = "散不走的"
+    ref_text = "我们部门最【行实】的那个同事今天辞职了。他说要回老家开民宿，我们都觉得可惜。老板【<鬼>火<戳>】地说现在的年轻人吃不了苦。结果第【二天】就看到他在朋友圈晒民宿照片，生意好得很。"
+    hyp_text = "我们部门最新实的嘞个同事今天辞职了，她说要回老家开【民宿】，我们都觉得可惜。【老板】鬼斧神工的说，现在的【年轻人】【吃不了苦】，结果第二天就看到她在朋友圈晒【民宿】照片，生意好得很。"
     result3 = evaluator.print_evaluation_report(ref_text, hyp_text)
 
 
