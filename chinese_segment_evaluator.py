@@ -126,6 +126,8 @@ class ChineseSegmentEvaluator:
         sdcer_result = self._sd_aligner.SDCER(ref_plain, hyp_plain)
         sdcer_value = sdcer_result.get('SDCER', 0.0)
 
+        # if not hyp_plain.strip():
+
          
         # 2. 获取去掉【】后的纯文本
         ref_text = ref_text.replace('<', '').replace('>', '')
@@ -466,28 +468,28 @@ def test_evaluator():
     evaluator = ChineseSegmentEvaluator()
     
     # 测试用例1：你提供的例子
-    # print("测试用例1:")
-    # ref_text = "【三不】孜儿嗯里"
-    # hyp_text = "【散不走】【的】"
-    # result1 = evaluator.print_evaluation_report(ref_text, hyp_text)
+    print("测试用例1:")
+    ref_text = "【三不】孜儿嗯里"
+    hyp_text = "【散不走】【的】"
+    result1 = evaluator.print_evaluation_report(ref_text, hyp_text)
     
     # print("\n" + "="*80 + "\n")
     
     # 测试用例2：更复杂的例子
-    # print("测试用例2:")
-    # ref_text = "【三不】孜儿嗯里【测试】文本"
-    # hyp_text = "【散不走】【的】【测试】文本内容"
-    # # # ['s', 'a5', 'n', 'p', 'u5', 'ts', 'i̪5', 'ərɜ', 'ŋɜ' , 'l', 'i2', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', '', '', '', '']
-    # # # ['s', 'a5', 'n', 'p', 'u5', 'ts', ''  , ''   , 'ou2', 't', 'ə1', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', 'n', 'ei5', 'ʐ', 'onɡɜ']
+    print("测试用例2:")
+    ref_text = "【三不】孜儿嗯里【测试】文本"
+    hyp_text = "【散不走】【的】【测试】文本内容"
+    # # ['s', 'a5', 'n', 'p', 'u5', 'ts', 'i̪5', 'ərɜ', 'ŋɜ' , 'l', 'i2', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', '', '', '', '']
+    # # ['s', 'a5', 'n', 'p', 'u5', 'ts', ''  , ''   , 'ou2', 't', 'ə1', 'tsh', 'o5', 's.', 'i.5', 'w', 'uəɜ', 'n', 'p', 'ə2', 'n', 'n', 'ei5', 'ʐ', 'onɡɜ']
 
     # result2 = evaluator.print_evaluation_report(ref_text, hyp_text)
     
     print("\n" + "="*80 + "\n")
     
     # 测试用例3：没有标记的文本
-    print("测试用例3:")
-    ref_text = "我们部门最【行实】的那个同事今天辞职了。他说要回老家开民宿，我们都觉得可惜。老板【<鬼>火<戳>】地说现在的年轻人吃不了苦。结果第【二天】就看到他在朋友圈晒民宿照片，生意好得很。"
-    hyp_text = "我们部门最新实的嘞个同事今天辞职了，她说要回老家开【民宿】，我们都觉得可惜。【老板】鬼斧神工的说，现在的【年轻人】【吃不了苦】，结果第二天就看到她在朋友圈晒【民宿】照片，生意好得很。"
+    # print("测试用例3:")
+
+
     result3 = evaluator.print_evaluation_report(ref_text, hyp_text)
 
 

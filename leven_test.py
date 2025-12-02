@@ -95,7 +95,7 @@ print(text)
 phn = chinese_word_phonemization(text)
 test_lev_phones1(phn[0].split(), phn[1].split())
 
-text = ["干冒干含有个红灯闪",
+text = ["干冒干含有个红灯闪路灯楼",
         "们们门们们红镇上"]
 print(text)
 phn = chinese_word_phonemization(text)

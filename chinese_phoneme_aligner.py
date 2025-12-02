@@ -250,6 +250,11 @@ class SDAligner:
         计算Segment-Dependent CER，遍历每个confusion_pair，判断ref片段是否在<>中，选择按音素或汉字计算，并区分S, D, I三种错误。
         音素片段按'||'分割，每个音节合并为一个整体。使用Levenshtein.editops严格统计S/D/I。
         """
+        if not hyp:
+            return {'SDCER': 1.0, 'S': 0, 'D': len(ref), 'I': 0, 'N': len(ref),
+                    'S_phn': 0, 'D_phn': 0, 'I_phn': 0,
+                    'S_chr': 0, 'D_chr': len(ref), 'I_chr': 0,
+                    'errors_phn': 0, 'errors_chr': len(ref)}
         # 1. 解析ref的分段区间
         segments = self._parse_segments(ref)
         seg_spans = []  # [(is_phoneme, start, end, text)]
